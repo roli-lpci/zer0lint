@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zer0lint"
+version = "0.1.0"
+description = "mem0 extraction optimizer: diagnose failures and generate custom prompts for your system"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "mem0ai>=0.1.0",
+    "typer[all]>=0.9.0",
+    "rich>=13.0.0",
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+zer0lint = "zer0lint.cli:app"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
