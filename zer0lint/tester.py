@@ -188,49 +188,129 @@ def generate_test_facts_for_categories(categories: list[str], count: int = 5) ->
     return test_facts[:count]
 
 
+def _extract_memory_text(result: object) -> str:
+    """Safely extract text from a mem0 result (handles v1.x dict format)."""
+    if isinstance(result, dict):
+        return result.get("memory") or result.get("content") or str(result)
+    return str(result)
+
+
+def _get_results_list(response: object) -> list:
+    """Unwrap mem0 v1.x response dict or return list as-is."""
+    if isinstance(response, dict):
+        return response.get("results", [])
+    if isinstance(response, list):
+        return response
+    return []
+
+
 def validate_extraction_prompt(
-    memory: object, test_facts: list[SyntheticFact], extraction_prompt: str
+    memory: object,
+    test_facts: list[SyntheticFact],
+    extraction_prompt: str,
+    user_id: str = "zer0lint_test_user",
+    wait_seconds: float = 1.0,
 ) -> dict:
     """
-    Test an extraction prompt against synthetic facts.
+    Test extraction quality against synthetic facts.
+
+    Compatible with mem0 v1.x (returns {"results": [...]}).
 
     Args:
-        memory: mem0.Memory instance with the prompt configured
-        test_facts: List of TestFact objects to test
-        extraction_prompt: The prompt to test
+        memory: mem0.Memory instance
+        test_facts: List of SyntheticFact objects to test
+        extraction_prompt: Optional extraction prompt to inject per add() call
+        user_id: Isolated user_id for test isolation (don't pollute prod data)
+        wait_seconds: Seconds to wait after add() before searching (async lag)
 
     Returns:
-        Dict with score (int), total (int), results (list of bool per fact)
+        Dict with score, total, results (per-fact bool), failures, details
     """
-    results = {"score": 0, "total": len(test_facts), "results": [], "failures": []}
+    import time
+
+    results = {
+        "score": 0,
+        "total": len(test_facts),
+        "results": [],
+        "failures": [],
+        "details": [],
+    }
+
+    prompt_kwargs = {}
+    if extraction_prompt:
+        prompt_kwargs["prompt"] = extraction_prompt
 
     for fact in test_facts:
-        # Add the test fact
+        detail = {"label": fact.label, "text": fact.text, "stored": False, "found": False}
+
+        # Store the fact
         try:
-            memory.add(fact.text, user_id="zer0lint_test_user")
+            memory.add(fact.text, user_id=user_id, **prompt_kwargs)
+            detail["stored"] = True
         except Exception as e:
-            results["failures"].append(f"add({fact.label}): {e}")
+            err = f"add({fact.label}): {str(e)[:80]}"
+            results["failures"].append(err)
+            detail["error"] = err
             results["results"].append(False)
+            results["details"].append(detail)
             continue
 
-        # Try to retrieve it using keywords
+        # Brief wait for async extraction
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
+        # Search for it back
         found = False
         try:
-            search_results = memory.search(
-                query=" ".join(fact.keywords), limit=5, user_id="zer0lint_test_user"
+            response = memory.search(
+                query=" ".join(fact.keywords),
+                user_id=user_id,
+                limit=10,
             )
-            if search_results:
-                for result in search_results:
-                    memory_text = result.get("memory") or result.get("content") or ""
-                    # Check if any keyword appears in the result
-                    if any(kw.lower() in memory_text.lower() for kw in fact.keywords):
-                        found = True
-                        break
+            search_results = _get_results_list(response)
+            for result in search_results:
+                memory_text = _extract_memory_text(result)
+                if any(kw.lower() in memory_text.lower() for kw in fact.keywords):
+                    found = True
+                    detail["matched_memory"] = memory_text[:120]
+                    break
         except Exception as e:
-            results["failures"].append(f"search({fact.label}): {e}")
+            err = f"search({fact.label}): {str(e)[:80]}"
+            results["failures"].append(err)
+            detail["search_error"] = err
 
+        detail["found"] = found
         results["results"].append(found)
+        results["details"].append(detail)
         if found:
             results["score"] += 1
 
     return results
+
+
+def count_stored_memories(memory: object, user_id: str = "zer0lint_test_user") -> int:
+    """Return count of stored memories for a user_id (mem0 v1.x safe)."""
+    try:
+        response = memory.get_all(user_id=user_id)
+        return len(_get_results_list(response))
+    except Exception:
+        return -1
+
+
+def cleanup_test_memories(memory: object, user_id: str = "zer0lint_test_user") -> int:
+    """Delete all test memories for isolation. Returns count deleted."""
+    deleted = 0
+    try:
+        response = memory.get_all(user_id=user_id)
+        memories = _get_results_list(response)
+        for m in memories:
+            mem_id = m.get("id") if isinstance(m, dict) else None
+            if mem_id:
+                try:
+                    memory.delete(memory_id=mem_id)
+                    deleted += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return deleted
