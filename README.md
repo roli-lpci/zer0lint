@@ -2,7 +2,8 @@
 
 **AI memory extraction diagnostics.** Find out why your AI agent forgets what matters — and fix it.
 
-[![PyPI](https://img.shields.io/badge/coming%20soon-PyPI-blue)](https://pypi.org/project/zer0lint/)
+[![PyPI version](https://img.shields.io/pypi/v/zer0lint)](https://pypi.org/project/zer0lint/)
+[![Python 3.9+](https://img.shields.io/pypi/pyversions/zer0lint)](https://pypi.org/project/zer0lint/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 [![Made by Hermes Labs](https://img.shields.io/badge/made%20by-Hermes%20Labs-purple)](https://hermes-labs.ai)
 
@@ -26,7 +27,7 @@ That's a **+20pp improvement** from getting the extraction prompt right.
 ## Quick Start
 
 ```bash
-pip install zer0lint  # coming soon
+pip install zer0lint
 
 # Check your current extraction health
 zer0lint check --config ~/.mem0/config.json
@@ -132,13 +133,13 @@ Scale test (10 facts, 5 domains):
 ## Installation
 
 ```bash
-# From source (current)
+# From PyPI (recommended)
+pip install zer0lint
+
+# From source
 git clone https://github.com/roli-lpci/zer0lint
 cd zer0lint
 pip install -e .
-
-# PyPI (coming soon)
-pip install zer0lint
 ```
 
 **Requirements:** Python 3.9+, mem0 v1.x, an Ollama or cloud LLM configured in your mem0 config.
