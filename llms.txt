@@ -1,0 +1,44 @@
+# zer0lint
+
+**Type:** CLI tool / Python library
+**Repo:** https://github.com/roli-lpci/zer0lint
+**PyPI:** https://pypi.org/project/zer0lint/
+**License:** Apache 2.0
+**Maintainer:** Hermes Labs (https://hermes-labs.ai)
+
+## What it does
+
+zer0lint diagnoses and fixes memory extraction failures in mem0 (v1.x) deployments. It tests whether your configured LLM is correctly extracting facts during `memory.add()`, scores the result (0–100%), and rewrites your config with a validated technical extraction prompt if the default is broken.
+
+## The core finding
+
+mem0's default extraction prompt is tuned for personal assistant use (preferences, habits). On technical/research facts, it silently fails: `add()` returns success, `search()` returns results, but the facts are never actually stored. Observed failure: mistral:7b + default prompt = 0/5 (0%) on technical facts. Same model + zer0lint prompt = 5/5 (100%). The fix is a config-level prompt injection (`custom_fact_extraction_prompt` field) — passing prompt via `memory.add(..., prompt=X)` has no effect in mem0 v1.x.
+
+## Commands
+
+- `zer0lint check --config <path>` — score current extraction health (HEALTHY/ACCEPTABLE/DEGRADED/CRITICAL)
+- `zer0lint generate --config <path>` — baseline, re-test with technical prompt, apply fix if improved
+- `zer0lint generate --config <path> --dry-run` — preview changes without writing
+
+## Benchmarks (2026-03-22, 5 technical facts)
+
+- mistral:7b default → 0% | zer0lint prompt → 100% | Δ +100pp
+- qwen3.5:4b default → 80% | zer0lint prompt → 100% | Δ +20pp
+
+## Ecosystem
+
+- **cogito-ergo** (roli-lpci/cogito-ergo): two-stage retrieval system; uses zer0lint's extraction prompt by default. Run zer0lint before deploying cogito-ergo.
+- **zer0dex** (roli-lpci/zer0dex): dual-layer memory architecture (compressed index + vector store); depends on clean extraction upstream.
+- **lintlang** (roli-lpci/lintlang): static linter for agent tool descriptions and prompts.
+
+## Install
+
+```
+pip install zer0lint
+```
+
+Requires: Python 3.9+, mem0 v1.x, Ollama or cloud LLM in config.
+
+## Key implementation detail
+
+The extraction prompt must be set in the mem0 config file under `custom_fact_extraction_prompt`. zer0lint validates the prompt against synthetic facts before writing it. Original config is always backed up.

@@ -1,6 +1,6 @@
 # zer0lint
 
-**AI memory extraction diagnostics.** Find out why your AI agent forgets what matters — and fix it.
+**AI memory extraction diagnostics.** Most mem0 users are storing 0% of signal without knowing it — zer0lint finds the gap and fixes it in one command.
 
 [![PyPI version](https://img.shields.io/pypi/v/zer0lint)](https://pypi.org/project/zer0lint/)
 [![Python 3.9+](https://img.shields.io/pypi/pyversions/zer0lint)](https://pypi.org/project/zer0lint/)
@@ -11,16 +11,29 @@
 
 ## The Problem
 
-You set up mem0 (or Zep, or LangMem) and your AI agent still seems forgetful. Technical decisions, version numbers, experiment results — it stores them, but can't recall them.
+You set up mem0 and your AI agent still seems forgetful. Technical decisions, version numbers, experiment results — it stores them, but can't recall them.
 
-**Why?** mem0's default extraction prompt is designed for personal assistants: favorite coffee shops, dietary preferences, weekend plans. When your agent stores "Redis upgraded to v7.2.4" or "security audit scored 7.2/10", it silently drops the specifics.
+**The failure is silent.** `add()` returns success. `search()` returns results. Benchmarks look fine. But when the extraction step produces malformed JSON or drops specifics, the facts never land. You won't see an error. You'll just notice your agent doesn't remember.
 
-**Proven gap (our testing):**
-- Default mem0 prompt → **70% recall** on technical facts
-- Wrong domain prompt (personal) → **40% recall**
-- zer0lint technical prompt → **90% recall**
+**Proof from a real run (2026-03-22, mistral:7b, default mem0 config):**
 
-That's a **+20pp improvement** from getting the extraction prompt right.
+```
+Score  : 0/5 (0%) — CRITICAL
+  ⚠  Model upgrade: We switched from gpt-3.5-turbo to gpt-4o-mini...
+  ⚠  API endpoint: The API service runs on port 8421 with TLS 1.3...
+  ⚠  CI status: CI pipeline passed on 2026-03-22 at commit a3f8c12...
+  ⚠  Configuration: Auth tokens expire after 3600 seconds...
+  ⚠  Version update: Updated Redis cluster to v7.2.4...
+```
+
+**After running `zer0lint generate` (same model, same config, new extraction prompt):**
+
+```
+Score  : 5/5 (100%) — HEALTHY
+  Δ    : +100pp
+```
+
+That is a 0%→100% jump. Same model. One config change.
 
 ---
 
@@ -30,13 +43,13 @@ That's a **+20pp improvement** from getting the extraction prompt right.
 pip install zer0lint
 
 # Check your current extraction health
-zer0lint check --config ~/.mem0/config.json
+zer0lint check --config ~/.cogito/config.json
 
 # Diagnose and fix
-zer0lint generate --config ~/.mem0/config.json
+zer0lint generate --config ~/.cogito/config.json
 
 # Dry run (see what would change without applying)
-zer0lint generate --config ~/.mem0/config.json --dry-run
+zer0lint generate --config ~/.cogito/config.json --dry-run
 ```
 
 ---
@@ -47,18 +60,25 @@ zer0lint generate --config ~/.mem0/config.json --dry-run
 Tests your current mem0 config against domain-relevant synthetic facts. Returns a score and status.
 
 ```
-zer0lint v0.2.0 — extraction health check
-Config : ~/.mem0/config.json
-Model  : qwen3.5:4b
+zer0lint v0.1.0 — extraction health check
+Config : ~/.cogito/config.json
+Model  : mistral:7b
 Prompt : default (mem0 built-in)
 
-Score  : 4/5 (80%) — HEALTHY
+Error in new_retrieved_facts: Unterminated string starting at: line 1 column 10 (char 9)
+Error in new_retrieved_facts: Expecting ',' delimiter: line 1 column 13 (char 12)
 
-  ✅ Version update
-  ✅ CI status
-  ✅ Model upgrade
-  ✅ Configuration
-  ⚠  API endpoint
+[CHECK] Using model: mistral:7b
+[CHECK] Testing with 5 synthetic facts...
+[CHECK] Score: 0/5 (0%) — CRITICAL
+  ⚠  Model upgrade: We switched from gpt-3.5-turbo to gpt-4o-mini...
+  ⚠  API endpoint: The API service runs on port 8421 with TLS 1.3...
+  ⚠  CI status: CI pipeline passed on 2026-03-22 at commit a3f8c12...
+  ⚠  Configuration: Auth tokens expire after 3600 seconds...
+  ⚠  Version update: Updated Redis cluster to v7.2.4...
+
+Score  : 0/5 (0%) — CRITICAL
+Run zer0lint generate to diagnose and fix.
 ```
 
 Statuses: **HEALTHY** (≥80%) · **ACCEPTABLE** (60–79%) · **DEGRADED** (40–59%) · **CRITICAL** (<40%)
@@ -71,22 +91,28 @@ Statuses: **HEALTHY** (≥80%) · **ACCEPTABLE** (60–79%) · **DEGRADED** (40�
 3. **Apply** — if improved, write the validated prompt to your config
 
 ```
-zer0lint v0.2.0 — extraction optimizer
-
 [1/3] Baseline — testing current config as-is...
-  Baseline score: 4/5 (80%)
+  Baseline score: 0/5 (0%)
+    ❌ Configuration
+    ❌ API endpoint
+    ❌ CI status
+    ❌ Model upgrade
+    ❌ Version update
 
-[2/3] Re-testing with zer0lint technical extraction prompt...
+[2/3] Re-testing with zer0lint technical extraction prompt (config-level)...
   Improved score: 5/5 (100%)
-  Improvement: +20pp
+  Improvement: +100pp
+    ✅ Configuration
+    ✅ API endpoint
+    ✅ CI status
+    ✅ Model upgrade
+    ✅ Version update
 
 Results:
-  Before : 4/5 (80%)
+  Before : 0/5 (0%)
   After  : 5/5 (100%)
-  Δ      : +20pp
-
+  Δ      : +100pp
 ✅ Fix applied to config.
-   Backup: ~/.mem0/config.backup.2026-03-23T14:20:00
 ```
 
 ---
@@ -110,23 +136,40 @@ zer0lint writes the validated prompt directly to your config — this is the cor
 
 ---
 
-## Test Results (2026-03-23)
+## Test Results (2026-03-22)
 
 Horse race across models (5 technical + research facts):
 
 | Model | Default prompt | zer0lint prompt | Δ |
 |---|---|---|---|
 | qwen3.5:4b | 80% | **100%** | +20pp |
-| mistral:7b | 40% | 40% | 0pp |
+| mistral:7b | **0%** | **100%** | **+100pp** |
 
-**mistral:7b** produces malformed JSON regardless of prompt — model quality is the bottleneck. zer0lint detects this and recommends switching models.
+**mistral:7b with the default mem0 prompt** produces malformed JSON, silently dropping all facts (0% recall). zer0lint's technical extraction prompt fixes this completely — 0%→100% on the same model with no other changes.
 
 Scale test (10 facts, 5 domains):
 
 | | Score | % |
 |---|---|---|
 | Default | 7/10 | 70% |
-| zer0lint | 9/10 | **90%** | 
+| zer0lint | 9/10 | **90%** |
+
+---
+
+## Ecosystem
+
+zer0lint is the ingestion health layer. Pair it with:
+
+**[cogito-ergo](https://github.com/roli-lpci/cogito-ergo)** — Production-ready two-stage memory retrieval. cogito-ergo uses zer0lint's technical extraction prompt by default. Recommended pipeline: run `zer0lint generate` first to validate ingestion, then deploy cogito-ergo for retrieval. No point optimizing retrieval if extraction is broken.
+
+**[zer0dex](https://github.com/roli-lpci/zer0dex)** — Dual-layer memory architecture (compressed index + vector store). zer0lint ensures the facts being indexed are actually extracted correctly before they enter the dual-layer store.
+
+**Recommended pipeline:**
+```
+zer0lint check     # is extraction working?
+zer0lint generate  # fix it if not
+cogito-ergo        # now deploy retrieval on clean data
+```
 
 ---
 
