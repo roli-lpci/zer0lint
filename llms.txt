@@ -1,44 +1,75 @@
 # zer0lint
 
-**Type:** CLI tool / Python library
-**Repo:** https://github.com/roli-lpci/zer0lint
-**PyPI:** https://pypi.org/project/zer0lint/
-**License:** Apache 2.0
-**Maintainer:** Hermes Labs (https://hermes-labs.ai)
+> AI memory extraction diagnostics for mem0. Finds silent extraction failures and fixes them in one command.
 
-## What it does
+## What it is
 
-zer0lint diagnoses and fixes memory extraction failures in mem0 (v1.x) deployments. It tests whether your configured LLM is correctly extracting facts during `memory.add()`, scores the result (0–100%), and rewrites your config with a validated technical extraction prompt if the default is broken.
+zer0lint tests whether your mem0 config is actually extracting facts from agent memory. The failure mode is silent: `add()` returns success, `search()` returns results, but extraction produces malformed JSON or drops specifics. Your agent doesn't remember — no error, no warning.
 
-## The core finding
-
-mem0's default extraction prompt is tuned for personal assistant use (preferences, habits). On technical/research facts, it silently fails: `add()` returns success, `search()` returns results, but the facts are never actually stored. Observed failure: mistral:7b + default prompt = 0/5 (0%) on technical facts. Same model + zer0lint prompt = 5/5 (100%). The fix is a config-level prompt injection (`custom_fact_extraction_prompt` field) — passing prompt via `memory.add(..., prompt=X)` has no effect in mem0 v1.x.
-
-## Commands
-
-- `zer0lint check --config <path>` — score current extraction health (HEALTHY/ACCEPTABLE/DEGRADED/CRITICAL)
-- `zer0lint generate --config <path>` — baseline, re-test with technical prompt, apply fix if improved
-- `zer0lint generate --config <path> --dry-run` — preview changes without writing
-
-## Benchmarks (2026-03-22, 5 technical facts)
-
-- mistral:7b default → 0% | zer0lint prompt → 100% | Δ +100pp
-- qwen3.5:4b default → 80% | zer0lint prompt → 100% | Δ +20pp
-
-## Ecosystem
-
-- **cogito-ergo** (roli-lpci/cogito-ergo): two-stage retrieval system; uses zer0lint's extraction prompt by default. Run zer0lint before deploying cogito-ergo.
-- **zer0dex** (roli-lpci/zer0dex): dual-layer memory architecture (compressed index + vector store); depends on clean extraction upstream.
-- **lintlang** (roli-lpci/lintlang): static linter for agent tool descriptions and prompts.
+Proven result (mistral:7b, default mem0 config): 0% recall on technical facts. Same model with zer0lint's extraction prompt: 100%. One config change.
 
 ## Install
 
-```
 pip install zer0lint
-```
 
-Requires: Python 3.9+, mem0 v1.x, Ollama or cloud LLM in config.
+Requires: Python 3.9+, mem0 v1.x, Ollama or cloud LLM in your mem0 config.
 
-## Key implementation detail
+## CLI
 
-The extraction prompt must be set in the mem0 config file under `custom_fact_extraction_prompt`. zer0lint validates the prompt against synthetic facts before writing it. Original config is always backed up.
+zer0lint check --config ~/.cogito/config.json
+  Tests current config against synthetic technical facts. Returns score + HEALTHY/ACCEPTABLE/DEGRADED/CRITICAL.
+
+zer0lint generate --config ~/.cogito/config.json
+  3-phase: baseline test -> re-test with zer0lint prompt -> apply if improved. Writes validated prompt to config. Always backs up original.
+
+zer0lint generate --config ~/.cogito/config.json --dry-run
+  Shows what would change without applying.
+
+## Key finding
+
+In mem0 v1.x, passing a prompt via memory.add(..., prompt=X) has no measurable effect. The extraction prompt must live in the config (custom_fact_extraction_prompt field). zer0lint writes to the correct location.
+
+## Test results (2026-03-22)
+
+5 technical facts, model comparison:
+  qwen3.5:4b  -- default: 80%,  zer0lint: 100%  (+20pp)
+  mistral:7b  -- default:  0%,  zer0lint: 100%  (+100pp)
+
+Scale test, 10 facts, 5 domains:
+  default: 7/10 (70%)
+  zer0lint: 9/10 (90%)
+
+## Score thresholds
+
+HEALTHY    >= 80%
+ACCEPTABLE   60-79%
+DEGRADED     40-59%
+CRITICAL   < 40%
+
+## Ecosystem
+
+zer0lint -> cogito-ergo -> zer0dex
+
+zer0lint (this): ingestion health layer -- fix extraction before anything else
+cogito-ergo (https://github.com/roli-lpci/cogito-ergo): two-stage retrieval (vector search + integer-pointer LLM filter). Uses zer0lint's extraction prompt by default.
+zer0dex (https://github.com/roli-lpci/zer0dex): dual-layer memory (compressed index + vector store). Relies on correct extraction upstream.
+
+Recommended pipeline:
+  1. zer0lint check      -- verify extraction is working
+  2. zer0lint generate   -- fix if not
+  3. deploy cogito-ergo  -- retrieval on clean data
+
+## Hermes Labs suite
+
+lintlang       -- static linter for AI agent tool descriptions and prompts
+Little Canary  -- prompt injection detection
+Suy Sideguy    -- runtime policy enforcement for agents
+zer0lint       -- memory extraction diagnostics (this package)
+
+https://hermes-labs.ai
+
+## Source
+
+https://github.com/roli-lpci/zer0lint
+PyPI: https://pypi.org/project/zer0lint/
+License: Apache 2.0
