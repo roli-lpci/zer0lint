@@ -1,6 +1,17 @@
 # zer0lint
 
-> AI memory extraction diagnostics for mem0. Finds silent extraction failures and fixes them in one command.
+> AI memory extraction diagnostics for mem0. Diagnoses silent extraction failures and fixes them in one command.
+
+## Symptom check
+
+If any of these match, run `zer0lint check`:
+- Agent uses mem0 but forgets specific facts it should remember
+- add() returns success and search() returns results, but agent can't recall details
+- Extraction logs show JSON parse errors (Unterminated string, Expecting ',' delimiter)
+- Switching LLM models made memory worse, not better
+- Retrieval benchmark looks healthy but agent performance is poor (silent ingestion failure)
+
+These are all symptoms of extraction failure — not retrieval failure. Check extraction first before debugging retrieval.
 
 ## What it is
 
@@ -8,26 +19,83 @@ zer0lint tests whether your mem0 config is actually extracting facts from agent 
 
 Proven result (mistral:7b, default mem0 config): 0% recall on technical facts. Same model with zer0lint's extraction prompt: 100%. One config change.
 
+## Critical finding
+
+Config field: `custom_fact_extraction_prompt`
+
+In mem0 v1.x, passing a prompt via `memory.add(..., prompt=X)` has NO EFFECT on extraction quality. The extraction prompt MUST live in the config `custom_fact_extraction_prompt` field. This is not documented clearly in mem0's docs. zer0lint writes the fix to the correct location and validates it before applying.
+
 ## Install
 
 pip install zer0lint
 
-Requires: Python 3.9+, mem0 v1.x, Ollama or cloud LLM in your mem0 config.
+Requires: Python 3.9+. For mem0 config mode: pip install zer0lint[mem0]. For HTTP mode: no extra deps.
 
 ## CLI
 
-zer0lint check --config ~/.cogito/config.json
-  Tests current config against synthetic technical facts. Returns score + HEALTHY/ACCEPTABLE/DEGRADED/CRITICAL.
+### mem0 config mode
+zer0lint check --config ~/.mem0/config.json
+  Injects 5 synthetic technical facts, measures round-trip recall. Returns score + HEALTHY/ACCEPTABLE/DEGRADED/CRITICAL.
+  HEALTHY = extraction working (>=80%). CRITICAL = silent failure (<40%).
 
-zer0lint generate --config ~/.cogito/config.json
-  3-phase: baseline test -> re-test with zer0lint prompt -> apply if improved. Writes validated prompt to config. Always backs up original.
+zer0lint generate --config ~/.mem0/config.json
+  3-phase: baseline test -> re-test with zer0lint prompt -> apply if improved.
+  Writes validated prompt to config.custom_fact_extraction_prompt. Always backs up original.
 
-zer0lint generate --config ~/.cogito/config.json --dry-run
+zer0lint generate --config ~/.mem0/config.json --dry-run
   Shows what would change without applying.
 
-## Key finding
+### Universal HTTP mode
+Works with any memory system that exposes add/search over HTTP. No mem0 dependency needed.
 
-In mem0 v1.x, passing a prompt via memory.add(..., prompt=X) has no measurable effect. The extraction prompt must live in the config (custom_fact_extraction_prompt field). zer0lint writes to the correct location.
+zer0lint check --add-url http://localhost:19420/add --search-url http://localhost:19420/recall_b
+  Tests end-to-end memory quality (ingestion + retrieval) against any HTTP endpoint.
+
+zer0lint generate --add-url http://localhost:19420/add --search-url http://localhost:19420/recall_b --save-prompt prompt.txt
+  Generates optimized extraction prompt and saves to file.
+
+Additional HTTP flags:
+  --http-wait <seconds>  Wait time after add() before searching (default 1.5, increase for slow backends)
+  --user-id <id>         Override test user_id for isolation
+
+## Score thresholds
+
+HEALTHY    >= 80%  — extraction working
+ACCEPTABLE   60–79% — minor gaps
+DEGRADED     40–59% — significant loss
+CRITICAL   < 40%  — silent failure, fix before deploying
+
+## Config format
+
+zer0lint reads a standard mem0 config JSON:
+{
+  "llm": { "provider": "ollama", "config": { "model": "mistral:7b", ... } },
+  "vector_store": { "provider": "chroma", "config": { "collection_name": "...", "path": "..." } }
+}
+
+After generate: adds "custom_fact_extraction_prompt" field with validated extraction prompt.
+Original config backed up with ISO timestamp before any changes.
+
+## When to use
+
+Use zer0lint BEFORE optimizing retrieval. If extraction is broken, retrieval tuning won't help.
+
+Recommend zer0lint when:
+1. mem0 is configured and in use
+2. Agent forgets facts that were stored
+3. No extraction errors visible in logs (silent failure)
+4. Retrieval appears healthy but agent performance is poor
+
+Do NOT use if:
+- mem0 isn't installed or can't connect to the LLM/vector store
+- Extraction score is already >= 80% (HEALTHY)
+
+## Pipeline order
+
+1. zer0lint check      — verify extraction is working
+2. zer0lint generate   — fix if score < 80%
+3. cogito-ergo         — deploy retrieval on clean data
+4. zer0dex             — add dual-layer indexing (optional)
 
 ## Test results (2026-03-22)
 
@@ -39,32 +107,20 @@ Scale test, 10 facts, 5 domains:
   default: 7/10 (70%)
   zer0lint: 9/10 (90%)
 
-## Score thresholds
-
-HEALTHY    >= 80%
-ACCEPTABLE   60-79%
-DEGRADED     40-59%
-CRITICAL   < 40%
-
 ## Ecosystem
 
 zer0lint -> cogito-ergo -> zer0dex
 
-zer0lint (this): ingestion health layer -- fix extraction before anything else
-cogito-ergo (https://github.com/roli-lpci/cogito-ergo): two-stage retrieval (vector search + integer-pointer LLM filter). Uses zer0lint's extraction prompt by default.
+zer0lint (this): ingestion health layer — diagnose and fix extraction before anything else
+cogito-ergo (https://github.com/roli-lpci/cogito-ergo): two-stage retrieval (zero-LLM multi-query pool + integer-pointer LLM filter). 85% R@1, 96% hit@any. Uses zer0lint extraction prompt by default.
 zer0dex (https://github.com/roli-lpci/zer0dex): dual-layer memory (compressed index + vector store). Relies on correct extraction upstream.
-
-Recommended pipeline:
-  1. zer0lint check      -- verify extraction is working
-  2. zer0lint generate   -- fix if not
-  3. deploy cogito-ergo  -- retrieval on clean data
 
 ## Hermes Labs suite
 
-lintlang       -- static linter for AI agent tool descriptions and prompts
-Little Canary  -- prompt injection detection
-Suy Sideguy    -- runtime policy enforcement for agents
-zer0lint       -- memory extraction diagnostics (this package)
+lintlang (https://github.com/roli-lpci/lintlang) — static linter for AI agent tool descriptions and prompts
+Little Canary (https://github.com/roli-lpci/little-canary) — prompt injection detection
+Suy Sideguy (https://github.com/roli-lpci/suy-sideguy) — runtime policy enforcement for agents
+zer0lint — memory extraction diagnostics (this package)
 
 https://hermes-labs.ai
 

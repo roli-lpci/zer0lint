@@ -4,19 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zer0lint"
-version = "0.2.0"
-description = "mem0 extraction optimizer: diagnose failures and generate custom prompts for your system"
+version = "0.0.3"
+description = "AI memory extraction diagnostics — works with mem0 or any HTTP memory endpoint"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-    "mem0ai>=0.1.0",
     "typer[all]>=0.9.0",
     "rich>=13.0.0",
-    "httpx>=0.24.0",
-    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
+mem0 = ["mem0ai>=1.0.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

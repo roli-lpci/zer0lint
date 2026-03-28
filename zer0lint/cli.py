@@ -55,25 +55,49 @@ def _load_config(config_path: Optional[str]) -> tuple[dict, Optional[Path]]:
 @app.command()
 def check(
     config_path: Optional[str] = typer.Option(None, "--config", help="Path to mem0 config.json"),
+    add_url: Optional[str] = typer.Option(None, "--add-url", help="HTTP endpoint for storing facts (e.g. http://localhost:19420/add)"),
+    search_url: Optional[str] = typer.Option(None, "--search-url", help="HTTP endpoint for searching memories (e.g. http://localhost:19420/recall_b)"),
+    http_wait: float = typer.Option(1.5, "--http-wait", help="Seconds to wait after add() before searching (increase for slow backends)"),
+    user_id: Optional[str] = typer.Option(None, "--user-id", help="Override test user_id for isolation (HTTP mode)"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     n: int = typer.Option(5, "--facts", "-n", help="Number of test facts"),
 ) -> None:
     """
-    Check your current mem0 extraction pipeline health.
+    Check extraction pipeline health — works with mem0 config or any HTTP memory endpoint.
 
-    Tests your config as-is with N synthetic domain facts.
-    Shows recall score and status (HEALTHY / ACCEPTABLE / DEGRADED / CRITICAL).
+    mem0 mode:  zer0lint check --config ~/.mem0/config.json
+    HTTP mode:  zer0lint check --add-url http://localhost:19420/add --search-url http://localhost:19420/recall_b
     """
-    config_dict, resolved = _load_config(config_path)
-    model = detect_extraction_model(config_dict)
-    has_custom = bool(config_dict.get("custom_fact_extraction_prompt"))
+    # --- Validate flags ---
+    if config_path and (add_url or search_url):
+        err_console.print("[red]Cannot use both --config and --add-url/--search-url. Pick one mode.[/red]")
+        raise typer.Exit(1)
+    if bool(add_url) != bool(search_url):
+        err_console.print("[red]--add-url and --search-url must be provided together.[/red]")
+        raise typer.Exit(1)
+
+    is_http = bool(add_url and search_url)
 
     console.print(f"\n[bold]zer0lint v{__version__} — extraction health check[/bold]")
-    console.print(f"Config : {resolved}")
-    console.print(f"Model  : {model}")
-    console.print(f"Prompt : {'custom' if has_custom else 'default (mem0 built-in)'}\n")
 
-    result = run_check(config_dict, verbose=verbose, n_facts=n)
+    if is_http:
+        console.print(f"Mode   : HTTP")
+        console.print(f"Add    : {add_url}")
+        console.print(f"Search : {search_url}\n")
+        result = run_check(
+            verbose=verbose, n_facts=n,
+            add_url=add_url, search_url=search_url,
+            http_timeout=30.0, http_user_id=user_id,
+            wait_seconds=http_wait,
+        )
+    else:
+        config_dict, resolved = _load_config(config_path)
+        model = detect_extraction_model(config_dict)
+        has_custom = bool(config_dict.get("custom_fact_extraction_prompt"))
+        console.print(f"Config : {resolved}")
+        console.print(f"Model  : {model}")
+        console.print(f"Prompt : {'custom' if has_custom else 'default (mem0 built-in)'}\n")
+        result = run_check(config_dict, verbose=verbose, n_facts=n)
 
     color = {"HEALTHY": "green", "ACCEPTABLE": "cyan", "DEGRADED": "yellow", "CRITICAL": "red"}.get(
         result["status"], "white"
@@ -98,40 +122,72 @@ def check(
 @app.command()
 def generate(
     config_path: Optional[str] = typer.Option(None, "--config", help="Path to mem0 config.json"),
+    add_url: Optional[str] = typer.Option(None, "--add-url", help="HTTP endpoint for storing facts"),
+    search_url: Optional[str] = typer.Option(None, "--search-url", help="HTTP endpoint for searching memories"),
+    http_wait: float = typer.Option(1.5, "--http-wait", help="Seconds to wait after add() before searching"),
+    user_id: Optional[str] = typer.Option(None, "--user-id", help="Override test user_id for isolation (HTTP mode)"),
     verbose: bool = typer.Option(True, "--verbose/--quiet", "-v/-q"),
-    apply: bool = typer.Option(True, "--apply/--dry-run", help="Apply fix to config"),
+    apply: bool = typer.Option(True, "--apply/--dry-run", help="Apply fix to config (mem0 mode) or save prompt (HTTP mode)"),
+    save_prompt: Optional[str] = typer.Option(None, "--save-prompt", help="Save generated prompt to file (HTTP mode)"),
     n: int = typer.Option(5, "--facts", "-n", help="Number of test facts"),
 ) -> None:
     """
-    Diagnose and fix your mem0 extraction pipeline.
+    Diagnose and fix extraction — works with mem0 config or any HTTP memory endpoint.
+
+    mem0 mode:  zer0lint generate --config ~/.mem0/config.json
+    HTTP mode:  zer0lint generate --add-url http://localhost:19420/add --search-url http://localhost:19420/recall_b --save-prompt prompt.txt
 
     Runs three phases:
-    1. Baseline recall test (current config)
-    2. Re-test with zer0lint technical extraction prompt (config-level)
-    3. If improved → write validated prompt to your config
-
-    Example:
-        zer0lint generate --config ~/.mem0/config.json
-        zer0lint generate --config ~/.mem0/config.json --dry-run
+    1. Baseline recall test
+    2. Re-test with zer0lint technical extraction prompt
+    3. Apply fix — writes to config (mem0 mode) or saves to file (HTTP mode)
     """
-    config_dict, resolved = _load_config(config_path)
-    model = detect_extraction_model(config_dict)
-    has_custom = bool(config_dict.get("custom_fact_extraction_prompt"))
+    # --- Validate flags ---
+    if config_path and (add_url or search_url):
+        err_console.print("[red]Cannot use both --config and --add-url/--search-url. Pick one mode.[/red]")
+        raise typer.Exit(1)
+    if bool(add_url) != bool(search_url):
+        err_console.print("[red]--add-url and --search-url must be provided together.[/red]")
+        raise typer.Exit(1)
+
+    is_http = bool(add_url and search_url)
 
     console.print(f"\n[bold]zer0lint v{__version__} — extraction optimizer[/bold]")
-    console.print(f"Config : {resolved}")
-    console.print(f"Model  : {model}")
-    console.print(f"Prompt : {'custom' if has_custom else 'default (mem0 built-in)'}")
-    if not apply:
-        console.print("[yellow]Mode   : dry-run (will not write to config)[/yellow]")
-    console.print()
 
-    result = run_generate(
-        base_config=config_dict,
-        config_path=resolved if apply else None,
-        verbose=verbose,
-        n_facts=n,
-    )
+    if is_http:
+        console.print(f"Mode   : HTTP")
+        console.print(f"Add    : {add_url}")
+        console.print(f"Search : {search_url}")
+        if not apply:
+            console.print("[yellow]Mode   : dry-run[/yellow]")
+        console.print()
+        result = run_generate(
+            verbose=verbose,
+            n_facts=n,
+            add_url=add_url,
+            search_url=search_url,
+            http_timeout=30.0,
+            http_user_id=user_id,
+            save_prompt_path=save_prompt if apply else None,
+            wait_seconds=http_wait,
+        )
+    else:
+        config_dict, resolved = _load_config(config_path)
+        model = detect_extraction_model(config_dict)
+        has_custom = bool(config_dict.get("custom_fact_extraction_prompt"))
+        console.print(f"Config : {resolved}")
+        console.print(f"Model  : {model}")
+        console.print(f"Prompt : {'custom' if has_custom else 'default (mem0 built-in)'}")
+        if not apply:
+            console.print("[yellow]Mode   : dry-run (will not write to config)[/yellow]")
+        console.print()
+        result = run_generate(
+            base_config=config_dict,
+            config_path=resolved if apply else None,
+            verbose=verbose,
+            n_facts=n,
+            wait_seconds=http_wait,
+        )
 
     if not result["success"]:
         err_console.print("[red]✗ Generate failed.[/red]")
@@ -158,6 +214,12 @@ def generate(
         if result.get("backup_path"):
             console.print(f"   Backup: {result['backup_path']}")
         console.print("\n[dim]Restart your agent to pick up the new extraction prompt.[/dim]")
+    elif verdict == "improved" and result.get("saved_prompt_path"):
+        console.print(f"\n[green]✅ Prompt saved to {result['saved_prompt_path']}[/green]")
+        console.print("[dim]Add this as the extraction prompt in your memory system's config.[/dim]")
+    elif verdict == "improved" and is_http and not result.get("saved_prompt_path"):
+        console.print(f"\n[cyan]Would improve by {imp_pp:+.0f}pp.[/cyan]")
+        console.print("[dim]Use --save-prompt <file> to save the prompt, then add it to your memory system's extraction config.[/dim]")
     elif verdict == "improved" and not result.get("applied"):
         console.print(f"\n[cyan]Would improve by {imp_pp:+.0f}pp — run without --dry-run to apply.[/cyan]")
     elif verdict == "no_improvement":

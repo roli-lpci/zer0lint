@@ -56,7 +56,18 @@ Return facts as JSON with key "facts" and a list of strings. Extract generously 
 
 def _make_memory(base_config: dict, custom_prompt: Optional[str] = None, collection_suffix: str = "test"):
     """Create a mem0 Memory instance with optional config-level prompt injection."""
-    from mem0 import Memory
+    if not base_config:
+        raise ValueError(
+            "No mem0 config provided. Either pass --config or use HTTP mode "
+            "(--add-url + --search-url)."
+        )
+    try:
+        from mem0 import Memory
+    except ImportError:
+        raise RuntimeError(
+            "mem0ai is not installed. Install with: pip install zer0lint[mem0]\n"
+            "Or use HTTP mode: zer0lint check --add-url <url> --search-url <url>"
+        )
 
     config = json.loads(json.dumps(base_config))  # deep copy
 
@@ -74,28 +85,69 @@ def _make_memory(base_config: dict, custom_prompt: Optional[str] = None, collect
     return Memory.from_config(config)
 
 
+def _make_backend(
+    base_config: Optional[dict] = None,
+    add_url: Optional[str] = None,
+    search_url: Optional[str] = None,
+    http_timeout: float = 15.0,
+    http_user_id: Optional[str] = None,
+    custom_prompt: Optional[str] = None,
+    collection_suffix: str = "test",
+) -> object:
+    """
+    Return a memory backend — either a mem0 Memory instance or an HttpMemoryAdapter.
+
+    HTTP mode (add_url + search_url provided): returns HttpMemoryAdapter.
+    mem0 mode (base_config provided): returns mem0 Memory.
+    """
+    if add_url and search_url:
+        from zer0lint.http_adapter import HttpMemoryAdapter
+        return HttpMemoryAdapter(
+            add_url=add_url,
+            search_url=search_url,
+            timeout=http_timeout,
+            user_id=http_user_id,
+        )
+    return _make_memory(base_config, custom_prompt=custom_prompt, collection_suffix=collection_suffix)
+
+
 def run_check(
-    base_config: dict,
+    base_config: Optional[dict] = None,
     verbose: bool = False,
     n_facts: int = 5,
+    add_url: Optional[str] = None,
+    search_url: Optional[str] = None,
+    http_timeout: float = 15.0,
+    http_user_id: Optional[str] = None,
+    wait_seconds: float = 1.5,
 ) -> dict:
     """
-    Phase 1: Baseline recall test.
-    Tests current config as-is against domain-relevant synthetic facts.
+    Baseline recall test — works with mem0 config or any HTTP memory endpoint.
 
     Returns dict: score, total, pct, status, details
     """
+    is_http = bool(add_url and search_url)
+
     if verbose:
-        model = detect_extraction_model(base_config)
-        print(f"[CHECK] Using model: {model}")
+        if not is_http:
+            model = detect_extraction_model(base_config)
+            print(f"[CHECK] Using model: {model}")
         print(f"[CHECK] Testing with {n_facts} synthetic facts...")
 
-    memory = _make_memory(base_config, collection_suffix="check")
+    memory = _make_backend(
+        base_config=base_config,
+        add_url=add_url,
+        search_url=search_url,
+        http_timeout=http_timeout,
+        http_user_id=http_user_id,
+        collection_suffix="check",
+    )
     uid = "zer0lint_check"
-    cleanup_test_memories(memory, user_id=uid)
+    if not is_http:
+        cleanup_test_memories(memory, user_id=uid)
 
     facts = generate_test_facts_for_categories(["technical", "research"], count=n_facts)
-    results = validate_extraction_prompt(memory, facts, "", user_id=uid, wait_seconds=1.5)
+    results = validate_extraction_prompt(memory, facts, "", user_id=uid, wait_seconds=wait_seconds)
 
     score = results["score"]
     total = results["total"]
@@ -127,25 +179,28 @@ def run_check(
 
 
 def run_generate(
-    base_config: dict,
+    base_config: Optional[dict] = None,
     config_path: Optional[str | Path] = None,
     verbose: bool = False,
     n_facts: int = 5,
+    add_url: Optional[str] = None,
+    search_url: Optional[str] = None,
+    http_timeout: float = 15.0,
+    http_user_id: Optional[str] = None,
+    save_prompt_path: Optional[str | Path] = None,
+    wait_seconds: float = 1.5,
 ) -> dict:
     """
-    Full zer0lint v0.2 generate flow (3 phases):
-      Phase 1: Baseline recall test (current config)
-      Phase 2: Re-test with zer0lint technical prompt (config-level injection)
-      Phase 3: If improved → write to config
+    Full zer0lint generate flow (3 phases) — works with mem0 config or HTTP endpoints.
 
-    Args:
-        base_config: Parsed mem0 config dict
-        config_path: Path to mem0 config.json (for applying the fix)
-        verbose: Print detailed output
-        n_facts: Number of test facts per run
+      Phase 1: Baseline recall test
+      Phase 2: Re-test with zer0lint technical extraction prompt
+      Phase 3: Apply fix — writes to config (mem0 mode) or saves to file (HTTP mode)
 
     Returns dict with: initial_score, improved_score, improvement_pp, applied, prompt, status
     """
+    is_http = bool(add_url and search_url)
+
     result = {
         "success": False,
         "initial_score": None,
@@ -156,6 +211,7 @@ def run_generate(
         "prompt": None,
         "applied": False,
         "backup_path": None,
+        "saved_prompt_path": None,
         "verdict": None,
     }
 
@@ -163,13 +219,19 @@ def run_generate(
     uid_baseline = "zer0lint_baseline"
     uid_improved = "zer0lint_improved"
 
-    # --- Phase 1: Baseline (current config, no changes) ---
+    # --- Phase 1: Baseline ---
     if verbose:
         print("\n[1/3] Baseline — testing current config as-is...")
 
-    mem_baseline = _make_memory(base_config, collection_suffix="baseline")
-    cleanup_test_memories(mem_baseline, user_id=uid_baseline)
-    res_baseline = validate_extraction_prompt(mem_baseline, facts, "", user_id=uid_baseline, wait_seconds=1.5)
+    mem_baseline = _make_backend(
+        base_config=base_config,
+        add_url=add_url, search_url=search_url,
+        http_timeout=http_timeout, http_user_id=http_user_id,
+        collection_suffix="baseline",
+    )
+    if not is_http:
+        cleanup_test_memories(mem_baseline, user_id=uid_baseline)
+    res_baseline = validate_extraction_prompt(mem_baseline, facts, "", user_id=uid_baseline, wait_seconds=wait_seconds)
 
     initial_score = res_baseline["score"]
     initial_pct = initial_score / n_facts * 100
@@ -182,21 +244,28 @@ def run_generate(
             icon = "✅" if d["found"] else "❌"
             print(f"    {icon} {d['label']}")
 
-    # If already perfect, done
     if initial_score >= n_facts:
         if verbose:
             print("\n✅ Extraction is already perfect. No changes needed.")
         result["success"] = True
         result["verdict"] = "already_healthy"
+        result["prompt"] = TECHNICAL_EXTRACTION_PROMPT  # still available via --save-prompt
         return result
 
-    # --- Phase 2: Re-test with zer0lint technical prompt (config-level) ---
+    # --- Phase 2: Re-test with zer0lint technical prompt ---
     if verbose:
-        print("\n[2/3] Re-testing with zer0lint technical extraction prompt (config-level)...")
+        print("\n[2/3] Re-testing with zer0lint technical extraction prompt...")
 
-    mem_improved = _make_memory(base_config, custom_prompt=TECHNICAL_EXTRACTION_PROMPT, collection_suffix="improved")
-    cleanup_test_memories(mem_improved, user_id=uid_improved)
-    res_improved = validate_extraction_prompt(mem_improved, facts, "", user_id=uid_improved, wait_seconds=1.5)
+    mem_improved = _make_backend(
+        base_config=base_config,
+        add_url=add_url, search_url=search_url,
+        http_timeout=http_timeout, http_user_id=http_user_id,
+        custom_prompt=TECHNICAL_EXTRACTION_PROMPT,
+        collection_suffix="improved",
+    )
+    if not is_http:
+        cleanup_test_memories(mem_improved, user_id=uid_improved)
+    res_improved = validate_extraction_prompt(mem_improved, facts, "", user_id=uid_improved, wait_seconds=wait_seconds)
 
     improved_score = res_improved["score"]
     improved_pct = improved_score / n_facts * 100
@@ -213,10 +282,21 @@ def run_generate(
             icon = "✅" if d["found"] else "❌"
             print(f"    {icon} {d['label']}")
 
-    # --- Phase 3: Apply if improved and above threshold ---
+    # --- Phase 3: Apply ---
     if improvement_pp > 0 and improved_score >= max(initial_score, 4):
         result["verdict"] = "improved"
-        if config_path:
+        if is_http:
+            # HTTP mode: no config to write — save prompt to file if requested
+            if save_prompt_path:
+                p = Path(save_prompt_path)
+                p.write_text(TECHNICAL_EXTRACTION_PROMPT)
+                result["saved_prompt_path"] = str(p)
+                if verbose:
+                    print(f"\n[3/3] Prompt saved to {p}")
+            else:
+                if verbose:
+                    print(f"\n[3/3] Use --save-prompt <file> to save the prompt, then add it to your memory system's extraction config.")
+        elif config_path:
             if verbose:
                 print(f"\n[3/3] Applying fix to config ({initial_pct:.0f}% → {improved_pct:.0f}%)...")
             apply_result = apply_prompt(config_path, TECHNICAL_EXTRACTION_PROMPT, backup=True)
