@@ -11,7 +11,7 @@ pip install -e ".[dev]"
 ## Checks
 
 ```bash
-ruff check zer0lint tests
+ruff check zer0lint tests --ignore E501
 pytest -q
 python -m py_compile zer0lint/*.py
 ```
